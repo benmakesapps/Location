@@ -15,10 +15,10 @@ public protocol LocationManagerProtocol {
     var isUpdating: Bool { get }
 
     /// Requests "When In Use" location permission.
-    func requestWhenInUseAuthorization()
+    func requestWhenInUseAuthorization() async
 
     /// Requests "Always" location permission.
-    func requestAlwaysAuthorization()
+    func requestAlwaysAuthorization() async
 
     /// Returns the current device location (one-shot).
     func currentLocation() async throws -> CLLocation

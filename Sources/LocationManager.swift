@@ -49,8 +49,10 @@ public final class LocationManager: LocationManagerProtocol {
     // MARK: - Private
 
     private let manager: CLLocationManager
+    private let delegate: AuthorizationDelegate
     private var updateTask: Task<Void, Never>?
     private var serviceSession: CLServiceSession?
+    private var authorizationContinuation: CheckedContinuation<Void, Never>?
     private let logger = Logger(subsystem: "Location", category: "LocationManager")
 
     // MARK: - Init
@@ -62,8 +64,18 @@ public final class LocationManager: LocationManagerProtocol {
     /// ``requestWhenInUseAuthorization()`` or begin location updates.
     public init() {
         let manager = CLLocationManager()
+        let delegate = AuthorizationDelegate()
+
         self.manager = manager
+        self.delegate = delegate
+
         self.authorizationStatus = manager.authorizationStatus
+        delegate.onAuthorizationChange = { [weak self] in
+            guard let self else { return }
+            self.refreshAuthorizationStatus()
+            self.authorizationContinuation?.resume()
+        }
+        manager.delegate = delegate
     }
 
     // MARK: - Authorization
@@ -74,8 +86,11 @@ public final class LocationManager: LocationManagerProtocol {
     /// authorization for the lifetime of the session. The system
     /// prompt appears only if the current status is `.notDetermined`.
     ///
-    public func requestWhenInUseAuthorization() {
-        serviceSession = CLServiceSession(authorization: .whenInUse)
+    public func requestWhenInUseAuthorization() async {
+        manager.requestWhenInUseAuthorization()
+        await withCheckedContinuation { continuation in
+            self.authorizationContinuation = continuation
+        }
         refreshAuthorizationStatus()
     }
 
@@ -87,8 +102,11 @@ public final class LocationManager: LocationManagerProtocol {
     /// Requires `NSLocationAlwaysAndWhenInUseUsageDescription` in
     /// Info.plist and the `location` background mode.
     ///
-    public func requestAlwaysAuthorization() {
-        serviceSession = CLServiceSession(authorization: .always)
+    public func requestAlwaysAuthorization() async {
+        manager.requestAlwaysAuthorization()
+        await withCheckedContinuation { continuation in
+            self.authorizationContinuation = continuation
+        }
         refreshAuthorizationStatus()
     }
 
@@ -100,21 +118,16 @@ public final class LocationManager: LocationManagerProtocol {
     /// first valid location. Throws if the user has not authorized
     /// location access or if services are unavailable.
     ///
+    /// You must call ``requestWhenInUseAuthorization()`` (or
+    /// ``requestAlwaysAuthorization()``) and wait for ``isAuthorized``
+    /// to become `true` before calling this method.
+    ///
     public func currentLocation() async throws -> CLLocation {
-        guard CLLocationManager.locationServicesEnabled() else {
-            throw LocationError.unavailable
+        guard isAuthorized else {
+            throw LocationError.unauthorized
         }
 
-        let session = CLServiceSession(authorization: .whenInUse)
-        defer { _ = session }
-
         for try await update in CLLocationUpdate.liveUpdates() {
-            refreshAuthorizationStatus()
-
-            if !isAuthorized {
-                throw LocationError.unauthorized
-            }
-
             if let loc = update.location {
                 self.location = loc
                 return loc
@@ -229,5 +242,15 @@ public final class LocationManager: LocationManagerProtocol {
         if authorizationStatus != newStatus {
             authorizationStatus = newStatus
         }
+    }
+}
+
+// MARK: - Authorization Delegate
+
+private final class AuthorizationDelegate: NSObject, CLLocationManagerDelegate {
+    var onAuthorizationChange: (() -> Void)?
+
+    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        onAuthorizationChange?()
     }
 }
